@@ -236,6 +236,25 @@ class Scheduler(SchedulerInterface):
         # chunked prefills, prefix caching, speculative decoding,
         # and the "jump decoding" optimization in the future.
 
+        # 传统推理服务里常把请求分成两类阶段：prefill 和 decode
+        # vLLM v1 的 scheduler 则不分阶段，使用一个更通用的抽象
+        # 对于每个请求，维护「已经算过的 token 数 (num_computed_tokens)」和「理论上应该算到的 token 数 (num_tokens_with spec)」
+        # 每一轮调度（一次模型 forward 之前），调度器的目标是：
+        # 在总 token 预算（batch token budget）允许的范围内，给一些请求“分配若干新 token 去计算”，
+        # 让它们的 num_computed_tokens 去追赶 num_tokens_with_spec
+        # 这也是 continuous batching 的本质：
+        # 每一轮都重新决定本轮 batch 里有哪些请求、每个请求推进几 token，而不是固定一个 batch 不变。
+
+        # num_tokens_with_spec = len(prompt_token_ids) + len(output_token_ids) + len(spec_token_ids)
+        # 可以理解为：“这个请求目前一共需要被模型处理到的 token 总长度”（包含三部分）：
+        # - prompt_token_ids：prompt token（输入上下文）
+        # - output_token_ids：已经“正式接受/生成”的输出 token
+        # - spec_token_ids：speculative decoding 过程中“草稿/候选”的 token（可能之后会被接受，也可能被拒绝回滚）
+        # num_computed_tokens：模型已经实际 forward 计算并把 KV/cache 状态推进到了第几个 token（对齐到某个位置）
+        # 所以：
+        # 如果 num_computed_tokens < num_tokens_with_spec，说明这个请求还有 token 没算，本轮应该给它分配一些 token 来算。
+        # 如果追平了，说明本轮它不需要再算（至少直到它产生了新的 spec token 或新的输出 token）。
+
         scheduled_new_reqs: list[Request] = []
         scheduled_resumed_reqs: list[Request] = []
         scheduled_running_reqs: list[Request] = []
