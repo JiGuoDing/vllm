@@ -280,6 +280,7 @@ class Scheduler(SchedulerInterface):
         # 如果 num_computed_tokens < num_tokens_with_spec，说明这个请求还有 token 没算，本轮应该给它分配一些 token 来算。
         # 如果追平了，说明本轮它不需要再算（至少直到它产生了新的 spec token 或新的输出 token）。
 
+        # * 初始化阶段，建立本轮调度要用的容器
         scheduled_new_reqs: list[Request] = []
         scheduled_resumed_reqs: list[Request] = []
         scheduled_running_reqs: list[Request] = []
@@ -298,10 +299,12 @@ class Scheduler(SchedulerInterface):
         scheduled_timestamp = time.monotonic()
 
         # First, schedule the RUNNING requests.
+        # * 处理 RUNNING 请求：遍历当前运行队列，在 token 预算内尽量推进，遍历正在运行的请求，优先处理他们
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
             request = self.running[req_index]
 
+            # * 检查异步调度：如果请求的输出占位符大于 0，且已计算的 token 数 + 1 - (输出占位符数 - 1) 大于等于 prompt token 数 + 最大 token 数，说明请求已达到最大长度，无需调度
             if (
                 request.num_output_placeholders > 0
                 # This is (num_computed_tokens + 1) - (num_output_placeholders - 1).
@@ -318,6 +321,7 @@ class Scheduler(SchedulerInterface):
                 req_index += 1
                 continue
 
+            # 计算次请求需要处理的 token 数量
             num_new_tokens = (
                 request.num_tokens_with_spec
                 + request.num_output_placeholders
